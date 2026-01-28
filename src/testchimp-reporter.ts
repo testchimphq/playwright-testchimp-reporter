@@ -256,7 +256,7 @@ export class TestChimpReporter implements Reporter {
     execution: TestExecutionState
   ): SmartTestExecutionReport {
     // Derive paths from test location
-    const paths = derivePaths(test, this.testsFolder, this.config.rootDir);
+    const paths = derivePaths(test, this.testsFolder, this.config.rootDir, this.options.verbose);
 
     // Map Playwright status to SmartTestExecutionStatus
     const status = this.mapStatus(result.status);

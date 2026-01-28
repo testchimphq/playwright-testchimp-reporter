@@ -17,20 +17,69 @@ export interface DerivedPaths {
  * @param test The Playwright TestCase
  * @param testsFolder Base folder for relative path calculation (optional)
  * @param rootDir Playwright root directory
+ * @param verbose Whether to log path resolution details
  * @returns Derived path components for test identification
  */
 export function derivePaths(
   test: TestCase,
   testsFolder: string,
-  rootDir: string
+  rootDir: string,
+  verbose: boolean = false
 ): DerivedPaths {
-  // Get the file path relative to testsFolder (or rootDir if not specified)
+  // Calculate path relative to testsFolder (or rootDir if not specified)
   const basePath = testsFolder ? path.resolve(rootDir, testsFolder) : rootDir;
-  const absolutePath = test.location.file;
-  const relativePath = path.relative(basePath, absolutePath);
+  const filePath = test.location.file;
+  const isRelativePath = !path.isAbsolute(filePath);
+  
+  if (verbose) {
+    console.log(`[TestChimp] Path derivation for test: ${test.title}`);
+    console.log(`[TestChimp]   rootDir: ${rootDir}`);
+    console.log(`[TestChimp]   testsFolder: ${testsFolder || '(not set)'}`);
+    console.log(`[TestChimp]   basePath: ${basePath}`);
+    console.log(`[TestChimp]   test.location.file (original): ${filePath}`);
+    console.log(`[TestChimp]   isRelativePath: ${isRelativePath}`);
+  }
+  
+  // Always normalize to absolute path first for deterministic behavior
+  // This ensures consistent behavior regardless of whether Playwright returns
+  // absolute or relative paths (which can vary between CI and local runs)
+  const absoluteFilePath = isRelativePath 
+    ? path.resolve(rootDir, filePath)
+    : filePath;
+  
+  if (verbose) {
+    console.log(`[TestChimp]   absoluteFilePath: ${absoluteFilePath}`);
+  }
+  
+  // Calculate relative path from basePath to absolute file path
+  let relativePath = path.relative(basePath, absoluteFilePath);
+  relativePath = path.normalize(relativePath);
+  
+  if (verbose) {
+    console.log(`[TestChimp]   relativePath (after path.relative): ${relativePath}`);
+  }
+  
+  // If the path still starts with ".." after normalization, remove those components
+  // This handles edge cases where the path goes outside the expected base
+  if (relativePath.startsWith('..')) {
+    if (verbose) {
+      console.log(`[TestChimp]   WARNING: Path starts with "..", removing parent directory references`);
+    }
+    const parts = relativePath.split(path.sep);
+    const filteredParts = parts.filter(p => p !== '..' && p !== '.');
+    relativePath = filteredParts.join(path.sep);
+    if (verbose) {
+      console.log(`[TestChimp]   relativePath (after removing ".."): ${relativePath}`);
+    }
+  }
 
   const folderPath = path.dirname(relativePath);
   const fileName = path.basename(relativePath);
+  
+  if (verbose) {
+    console.log(`[TestChimp]   Final folderPath: "${folderPath}"`);
+    console.log(`[TestChimp]   Final fileName: "${fileName}"`);
+  }
 
   // Build suite path from parent suites (describe blocks)
   // Walk up the parent chain, collecting suite titles
