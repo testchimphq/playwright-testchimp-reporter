@@ -117,7 +117,12 @@ export class TestChimpReporter implements Reporter {
   }
 
   onTestBegin(test: TestCase, result: TestResult): void {
-    if (!this.isEnabled) return;
+    console.log(`[TestChimp] onTestBegin called for test: ${test.title} (retry: ${result.retry})`);
+    
+    if (!this.isEnabled) {
+      console.log(`[TestChimp] Reporter is not enabled, skipping test start tracking for: ${test.title}`);
+      return;
+    }
 
     const testKey = this.getTestKey(test, result.retry);
 
@@ -127,6 +132,8 @@ export class TestChimpReporter implements Reporter {
       startedAt: Date.now(),
       attemptNumber: result.retry + 1
     });
+    
+    console.log(`[TestChimp] Created execution state for test: ${test.title} (key: ${testKey})`);
 
     // Update retry tracking
     const retryKey = test.id;
@@ -183,29 +190,55 @@ export class TestChimpReporter implements Reporter {
   }
 
   async onTestEnd(test: TestCase, result: TestResult): Promise<void> {
-    if (!this.isEnabled || !this.apiClient) return;
+    console.log(`[TestChimp] onTestEnd called for test: ${test.title} (status: ${result.status}, retry: ${result.retry})`);
+    
+    if (!this.isEnabled) {
+      console.log(`[TestChimp] Reporter is not enabled, skipping report for: ${test.title}`);
+      return;
+    }
+    
+    if (!this.apiClient) {
+      console.log(`[TestChimp] API client is not initialized, skipping report for: ${test.title}`);
+      return;
+    }
 
     const testKey = this.getTestKey(test, result.retry);
     const execution = this.testExecutions.get(testKey);
 
-    if (!execution) return;
+    if (!execution) {
+      console.log(`[TestChimp] No execution state found for test: ${test.title} (key: ${testKey}), skipping report`);
+      console.log(`[TestChimp] Available execution keys: ${Array.from(this.testExecutions.keys()).join(', ')}`);
+      return;
+    }
 
     // Check if this is the final attempt (for retry handling)
+    // If test passed, it's always the final attempt (no retries will occur)
+    // If test failed, check if we've reached max retries
     const retryKey = test.id;
     const retryInfo = this.testRetryInfo.get(retryKey);
-    const isFinalAttempt = !retryInfo || result.retry >= retryInfo.maxRetries;
+    const testPassed = result.status === 'passed';
+    const isFinalAttempt = testPassed || !retryInfo || result.retry >= retryInfo.maxRetries;
+
+    console.log(`[TestChimp] Test status: ${result.status}, retry: ${result.retry}, maxRetries: ${retryInfo?.maxRetries ?? 'unknown'}, isFinalAttempt: ${isFinalAttempt}`);
 
     // Skip non-final attempts if configured
     if (this.options.reportOnlyFinalAttempt && !isFinalAttempt) {
-      if (this.options.verbose) {
-        console.log(`[TestChimp] Skipping non-final attempt ${result.retry + 1} for: ${test.title}`);
-      }
+      console.log(`[TestChimp] Skipping non-final attempt ${result.retry + 1} for: ${test.title}`);
       this.testExecutions.delete(testKey);
       return;
     }
 
     // Build the report
     const report = this.buildReport(test, result, execution);
+
+    // Log report details
+    console.log(`[TestChimp] Preparing to send report for test: ${test.title}`);
+    console.log(`[TestChimp]   Status: ${report.jobDetail.status}`);
+    console.log(`[TestChimp]   Steps: ${report.jobDetail.steps.length}`);
+    const stepsWithScreenshots = report.jobDetail.steps.filter(s => s.screenshotBase64);
+    if (stepsWithScreenshots.length > 0) {
+      console.log(`[TestChimp]   Steps with screenshots: ${stepsWithScreenshots.length}`);
+    }
 
     try {
       const response = await this.apiClient.ingestExecutionReport(report);
@@ -320,14 +353,24 @@ export class TestChimpReporter implements Reporter {
       (a) => a.contentType?.startsWith('image/') && a.path
     );
 
-    if (screenshots.length === 0) return;
+    console.log(`[TestChimp] Processing screenshots: ${screenshots.length} screenshot(s) found, ${steps.length} step(s) total`);
+
+    if (screenshots.length === 0) {
+      console.log(`[TestChimp] No screenshots found in attachments`);
+      return;
+    }
 
     // Find failing steps
     const failingSteps = steps.filter(
       (s) => s.status === StepExecutionStatus.FAILURE_STEP_EXECUTION && !s.screenshotBase64
     );
 
-    if (failingSteps.length === 0) return;
+    console.log(`[TestChimp] Found ${failingSteps.length} failing step(s) without screenshots`);
+
+    if (failingSteps.length === 0) {
+      console.log(`[TestChimp] No failing steps to attach screenshots to`);
+      return;
+    }
 
     // Attach screenshots to failing steps
     for (let i = 0; i < Math.min(screenshots.length, failingSteps.length); i++) {
@@ -337,16 +380,16 @@ export class TestChimpReporter implements Reporter {
       if (screenshot.path) {
         try {
           const imageBuffer = fs.readFileSync(screenshot.path);
-          step.screenshotBase64 = imageBuffer.toString('base64');
+          const base64String = imageBuffer.toString('base64');
+          step.screenshotBase64 = base64String;
 
-          if (this.options.verbose) {
-            console.log(`[TestChimp] Attached screenshot to failing step: ${step.description}`);
-          }
+          console.log(`[TestChimp] ✓ Attached screenshot (${base64String.length} bytes) to failing step: "${step.description}"`);
+          console.log(`[TestChimp]   Screenshot path: ${screenshot.path}`);
         } catch (error) {
-          if (this.options.verbose) {
-            console.warn(`[TestChimp] Failed to read screenshot: ${screenshot.path}`, error);
-          }
+          console.error(`[TestChimp] ✗ Failed to read screenshot from ${screenshot.path}:`, error);
         }
+      } else {
+        console.warn(`[TestChimp] Screenshot at index ${i} has no path`);
       }
     }
   }

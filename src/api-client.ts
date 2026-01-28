@@ -85,8 +85,21 @@ export class TestChimpApiClient {
     const snakeCaseReport = toSnakeCase({ report });
 
     try {
-      if (this.verbose) {
-        console.log('[TestChimp] Sending report for test:', report.testName);
+      // Always log when sending reports (not just when verbose)
+      console.log(`[TestChimp] Sending report for test: ${report.testName} (status: ${report.jobDetail?.status}, steps: ${report.jobDetail?.steps?.length || 0})`);
+      
+      // Log screenshot details if verbose
+      if (this.verbose && report.jobDetail?.steps) {
+        const stepsWithScreenshots = report.jobDetail.steps.filter(s => s.screenshotBase64);
+        if (stepsWithScreenshots.length > 0) {
+          console.log(`[TestChimp]   Including ${stepsWithScreenshots.length} step(s) with screenshots`);
+          stepsWithScreenshots.forEach((step, idx) => {
+            const screenshotSize = step.screenshotBase64?.length || 0;
+            console.log(`[TestChimp]     Step ${idx + 1}: "${step.description}" - screenshot size: ${screenshotSize} bytes`);
+          });
+        } else {
+          console.log(`[TestChimp]   No screenshots attached to any steps`);
+        }
       }
 
       const response = await this.client.post(
