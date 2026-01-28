@@ -69,7 +69,7 @@ export class TestChimpApiClient {
       headers: {
         'Content-Type': 'application/json',
         'testchimp-api-key': apiKey,
-        'testchimp-project-id': projectId
+        'project-id': projectId
       },
       timeout: 30000
     });

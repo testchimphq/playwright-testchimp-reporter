@@ -1,6 +1,6 @@
 {
   "name": "playwright-testchimp-reporter",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Playwright reporter for TestChimp test execution tracking and coverage reporting",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
