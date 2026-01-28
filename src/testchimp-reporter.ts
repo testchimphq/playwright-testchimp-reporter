@@ -148,9 +148,17 @@ export class TestChimpReporter implements Reporter {
 
     if (!execution) return;
 
-    // Only capture test.step category (user-defined steps), not internal hooks
-    // Also capture 'expect' category for assertions
-    if (step.category !== 'test.step' && step.category !== 'expect') {
+    // Log all steps when verbose is enabled (for debugging)
+    if (this.options.verbose) {
+      console.log(`[TestChimp] Step seen: "${step.title}" (category: ${step.category})`);
+    }
+
+    // Capture test.step (user-defined steps), expect (assertions), and pw:api (Playwright API calls)
+    // Exclude internal hooks, fixtures, and attachments
+    if (step.category !== 'test.step' && step.category !== 'expect' && step.category !== 'pw:api') {
+      if (this.options.verbose) {
+        console.log(`[TestChimp] Step filtered out: "${step.title}" (category: ${step.category})`);
+      }
       return;
     }
 
@@ -169,8 +177,8 @@ export class TestChimpReporter implements Reporter {
 
     execution.steps.push(executionStep);
 
-    if (this.options.verbose && step.error) {
-      console.log(`[TestChimp] Step failed: ${step.title}`);
+    if (this.options.verbose) {
+      console.log(`[TestChimp] Step captured: ${stepNumber} (${step.category}): ${step.title} - ${executionStep.status}`);
     }
   }
 

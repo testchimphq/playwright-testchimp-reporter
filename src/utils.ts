@@ -83,22 +83,36 @@ export function derivePaths(
 
   // Build suite path from parent suites (describe blocks)
   // Walk up the parent chain, collecting suite titles
+  // According to Playwright docs: suite.location is missing for root and project suites
+  // We should only include suites that have a location (file-level and describe suites)
+  // and ensure they belong to the same test file
   const suitePath: string[] = [];
   let parent: Suite | undefined = test.parent;
+  const testFile = test.location.file;
 
   while (parent) {
-    // Skip if title is empty or matches the file name (file-level suite)
+    // Stop if we've reached a root or project suite (they don't have a location)
+    // This prevents including browser/project names like "chromium" in the suite path
+    if (!parent.location) {
+      break;
+    }
+
+    // Only include suites from the same test file
+    if (parent.location.file !== testFile) {
+      parent = parent.parent;
+      continue;
+    }
+
+    // Skip file-level suites (they have a location but their title is the file path)
+    // Only include describe block suites (nested test groups)
     if (parent.title &&
         !parent.title.endsWith('.spec.ts') &&
         !parent.title.endsWith('.test.ts') &&
         !parent.title.endsWith('.spec.js') &&
         !parent.title.endsWith('.test.js')) {
-      // Only add non-file-level, non-project-level suites
-      // Project suites have no parent with a title
-      if (parent.parent) {
-        suitePath.unshift(parent.title);
-      }
+      suitePath.unshift(parent.title);
     }
+    
     parent = parent.parent;
   }
 
