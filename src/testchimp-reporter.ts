@@ -73,7 +73,7 @@ export class TestChimpReporter implements Reporter {
   constructor(options: TestChimpReporterOptions = {}) {
     this.options = {
       apiKey: options.apiKey || '',
-      apiUrl: options.apiUrl || '',
+      backendUrl: options.backendUrl || '',
       projectId: options.projectId || '',
       testsFolder: options.testsFolder || '',
       release: options.release || '',
@@ -90,7 +90,7 @@ export class TestChimpReporter implements Reporter {
 
     // Initialize configuration from env vars (env vars take precedence)
     const apiKey = getEnvVar('TESTCHIMP_API_KEY', this.options.apiKey);
-    const apiUrl = getEnvVar('TESTCHIMP_API_URL', this.options.apiUrl) || 'https://featureservice.testchimp.io';
+    const backendUrl = getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io';
     const projectId = getEnvVar('TESTCHIMP_PROJECT_ID', this.options.projectId);
     this.testsFolder = getEnvVar('TESTCHIMP_TESTS_FOLDER', this.options.testsFolder) || 'tests';
 
@@ -104,7 +104,7 @@ export class TestChimpReporter implements Reporter {
       return;
     }
 
-    this.apiClient = new TestChimpApiClient(apiUrl, apiKey, projectId, this.options.verbose);
+    this.apiClient = new TestChimpApiClient(backendUrl, apiKey, projectId, this.options.verbose);
     this.isEnabled = true;
 
     if (this.options.verbose) {
@@ -348,15 +348,24 @@ export class TestChimpReporter implements Reporter {
     steps: SmartTestExecutionStep[],
     attachments: TestResult['attachments']
   ): void {
-    // Filter for image attachments with paths
+    // Log all attachments for debugging
+    console.log(`[TestChimp] Processing screenshots: ${attachments.length} total attachment(s), ${steps.length} step(s) total`);
+    if (attachments.length > 0) {
+      attachments.forEach((att, idx) => {
+        console.log(`[TestChimp]   Attachment ${idx + 1}: name="${att.name}", contentType="${att.contentType}", path="${att.path || 'none'}", body=${att.body ? `present (${att.body.length} bytes)` : 'none'}`);
+      });
+    }
+
+    // Filter for image attachments (with either path or body)
     const screenshots = attachments.filter(
-      (a) => a.contentType?.startsWith('image/') && a.path
+      (a) => a.contentType?.startsWith('image/') && (a.path || a.body)
     );
 
-    console.log(`[TestChimp] Processing screenshots: ${screenshots.length} screenshot(s) found, ${steps.length} step(s) total`);
+    console.log(`[TestChimp] Found ${screenshots.length} screenshot(s) (with path or body)`);
 
     if (screenshots.length === 0) {
-      console.log(`[TestChimp] No screenshots found in attachments`);
+      console.log(`[TestChimp] No screenshots found in attachments - Playwright may not be configured to capture screenshots on failure`);
+      console.log(`[TestChimp] To enable screenshots, add 'screenshot: "only-on-failure"' to your Playwright config`);
       return;
     }
 
@@ -372,10 +381,12 @@ export class TestChimpReporter implements Reporter {
       return;
     }
 
-    // Attach screenshots to failing steps
-    for (let i = 0; i < Math.min(screenshots.length, failingSteps.length); i++) {
-      const screenshot = screenshots[i];
-      const step = failingSteps[i];
+    // Attach screenshots to failing steps (attach test-level screenshot to all failing steps)
+    // If there's only one screenshot but multiple failing steps, attach it to all of them
+    for (let stepIdx = 0; stepIdx < failingSteps.length; stepIdx++) {
+      const step = failingSteps[stepIdx];
+      // Use the last screenshot (most recent, likely from test failure) for all failing steps
+      const screenshot = screenshots[screenshots.length - 1];
 
       if (screenshot.path) {
         try {
@@ -383,13 +394,23 @@ export class TestChimpReporter implements Reporter {
           const base64String = imageBuffer.toString('base64');
           step.screenshotBase64 = base64String;
 
-          console.log(`[TestChimp] ✓ Attached screenshot (${base64String.length} bytes) to failing step: "${step.description}"`);
+          console.log(`[TestChimp] ✓ Attached screenshot (${base64String.length} bytes) from path to failing step ${stepIdx + 1}: "${step.description}"`);
           console.log(`[TestChimp]   Screenshot path: ${screenshot.path}`);
         } catch (error) {
           console.error(`[TestChimp] ✗ Failed to read screenshot from ${screenshot.path}:`, error);
         }
+      } else if (screenshot.body) {
+        // Screenshot is already in body (Buffer), convert to base64
+        try {
+          const base64String = Buffer.from(screenshot.body).toString('base64');
+          step.screenshotBase64 = base64String;
+
+          console.log(`[TestChimp] ✓ Attached screenshot (${base64String.length} bytes) from body to failing step ${stepIdx + 1}: "${step.description}"`);
+        } catch (error) {
+          console.error(`[TestChimp] ✗ Failed to convert screenshot body to base64:`, error);
+        }
       } else {
-        console.warn(`[TestChimp] Screenshot at index ${i} has no path`);
+        console.warn(`[TestChimp] Screenshot has neither path nor body`);
       }
     }
   }

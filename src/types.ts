@@ -80,8 +80,8 @@ export interface IngestSmartTestExecutionReportResponse {
 export interface TestChimpReporterOptions {
   /** Override TESTCHIMP_API_KEY env var */
   apiKey?: string;
-  /** Override TESTCHIMP_API_URL env var (default: https://featureservice.testchimp.io) */
-  apiUrl?: string;
+  /** Override TESTCHIMP_BACKEND_URL env var (default: https://featureservice.testchimp.io) */
+  backendUrl?: string;
   /** Override TESTCHIMP_PROJECT_ID env var */
   projectId?: string;
   /** Override TESTCHIMP_TESTS_FOLDER env var - base folder for relative path calculation */
