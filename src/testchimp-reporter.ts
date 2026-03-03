@@ -298,6 +298,12 @@ export class TestChimpReporter implements Reporter {
   ): SmartTestExecutionReport {
     // Derive paths from test location
     const paths = derivePaths(test, this.testsFolder, this.config.rootDir, this.options.verbose);
+    const branchName =
+      getEnvVar('TESTCHIMP_BRANCH', '') ||
+      getEnvVar('GITHUB_HEAD_REF', '') ||
+      getEnvVar('GITHUB_REF_NAME', '') ||
+      getEnvVar('CI_COMMIT_REF_NAME', '') ||
+      undefined;
 
     // Map Playwright status to SmartTestExecutionStatus
     const status = this.mapStatus(result.status);
@@ -323,7 +329,8 @@ export class TestChimpReporter implements Reporter {
         scenarioCoverageResults: [] // Backend will populate if empty
       },
       startedAtMillis: execution.startedAt,
-      completedAtMillis: Date.now()
+      completedAtMillis: Date.now(),
+      branchName
     };
   }
 

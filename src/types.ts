@@ -61,6 +61,7 @@ export interface SmartTestExecutionReport {
   jobDetail: SmartTestExecutionJobDetail;
   startedAtMillis?: number;
   completedAtMillis?: number;
+  branchName?: string;
 }
 
 export interface IngestSmartTestExecutionReportRequest {
