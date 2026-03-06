@@ -7,7 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { test } from '@playwright/test';
-import { derivePaths, deriveTestsFolder, getBranchName } from './utils';
+import { derivePathsFromTestInfo, deriveTestsFolder, getBranchName } from './utils';
 
 const BATCH_ID_FILENAME = '.testchimp-batch-invocation-id';
 
@@ -28,8 +28,8 @@ test.beforeEach(async ({ page }, testInfo) => {
   const project = testInfo.project as { rootDir?: string };
   const projectRootDir = project.rootDir ?? process.cwd();
   const testsFolder = deriveTestsFolder(projectRootDir);
-  const paths = derivePaths(
-    testInfo as unknown as Parameters<typeof derivePaths>[0],
+  const paths = derivePathsFromTestInfo(
+    testInfo as unknown as Parameters<typeof derivePathsFromTestInfo>[0],
     testsFolder,
     projectRootDir,
     false

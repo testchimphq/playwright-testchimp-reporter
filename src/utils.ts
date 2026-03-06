@@ -11,6 +11,85 @@ export interface DerivedPaths {
   testName: string;
 }
 
+export interface TestInfoLike {
+  file: string;
+  title: string;
+  titlePath?: () => string[];
+  project?: { name?: string };
+}
+
+/**
+ * Derive path components from a Playwright TestInfo (runtime context).
+ *
+ * Note: This intentionally avoids reporter-only types like TestCase/Suite, since this
+ * is used in `@playwright/test` runtime hooks.
+ */
+export function derivePathsFromTestInfo(
+  testInfo: TestInfoLike,
+  testsFolder: string,
+  rootDir: string,
+  verbose: boolean = false
+): DerivedPaths {
+  const basePath = testsFolder ? path.resolve(rootDir, testsFolder) : rootDir;
+  const filePath = testInfo.file;
+  const isRelativePath = !path.isAbsolute(filePath);
+
+  if (verbose) {
+    // eslint-disable-next-line no-console
+    console.log(`[TestChimp] Path derivation for test: ${testInfo.title}`);
+    // eslint-disable-next-line no-console
+    console.log(`[TestChimp]   rootDir: ${rootDir}`);
+    // eslint-disable-next-line no-console
+    console.log(`[TestChimp]   testsFolder: ${testsFolder || "(not set)"}`);
+    // eslint-disable-next-line no-console
+    console.log(`[TestChimp]   basePath: ${basePath}`);
+    // eslint-disable-next-line no-console
+    console.log(`[TestChimp]   testInfo.file (original): ${filePath}`);
+    // eslint-disable-next-line no-console
+    console.log(`[TestChimp]   isRelativePath: ${isRelativePath}`);
+  }
+
+  const absoluteFilePath = isRelativePath ? path.resolve(rootDir, filePath) : filePath;
+
+  let relativePath = path.relative(basePath, absoluteFilePath);
+  relativePath = path.normalize(relativePath);
+
+  if (relativePath.startsWith("..")) {
+    const parts = relativePath.split(path.sep);
+    const filteredParts = parts.filter((p) => p !== ".." && p !== ".");
+    relativePath = filteredParts.join(path.sep);
+  }
+
+  // Normalize to forward slashes for consistent cross-platform encoding.
+  const posixRelative = relativePath.split(path.sep).join("/");
+  const folderPath = path.posix.dirname(posixRelative);
+  const fileName = path.posix.basename(posixRelative);
+
+  // Derive suitePath from titlePath() (exclude project + file + test title)
+  const suitePath: string[] = [];
+  const tp = typeof testInfo.titlePath === "function" ? testInfo.titlePath() : [];
+  if (Array.isArray(tp) && tp.length > 1) {
+    const projectName = testInfo.project?.name;
+    const baseFile = path.posix.basename(filePath.split(path.sep).join("/"));
+    for (const part of tp.slice(0, -1)) {
+      if (!part) continue;
+      if (projectName && part === projectName) continue;
+      if (part === baseFile) continue;
+      // Filter out file-ish parts that Playwright sometimes includes.
+      if (/\.(spec|test)\.[jt]sx?$/.test(part)) continue;
+      if (part.includes("/") || part.includes("\\")) continue;
+      suitePath.push(part);
+    }
+  }
+
+  return {
+    folderPath: folderPath === "." ? "" : folderPath,
+    fileName,
+    suitePath,
+    testName: testInfo.title,
+  };
+}
+
 /**
  * Derive path components from a Playwright TestCase
  *
