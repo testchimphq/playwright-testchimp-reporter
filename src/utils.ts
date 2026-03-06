@@ -125,6 +125,30 @@ export function derivePaths(
 }
 
 /**
+ * Derive the tests folder name/path used for relative path calculation.
+ * Uses TESTCHIMP_TESTS_FOLDER env if set, otherwise default "tests".
+ */
+export function deriveTestsFolder(_projectRootDir: string): string {
+  return process.env.TESTCHIMP_TESTS_FOLDER || 'tests';
+}
+
+/**
+ * Get current branch name from CI/env (for TrueCoverage ci-test-info).
+ */
+export function getBranchName(): string | undefined {
+  const fromEnv =
+    process.env.TESTCHIMP_BRANCH_NAME ||
+    process.env.CI_COMMIT_REF_NAME ||
+    process.env.GIT_BRANCH ||
+    process.env.BRANCH_NAME;
+  if (fromEnv) return fromEnv;
+  // GitHub Actions: GITHUB_REF is e.g. refs/heads/main
+  const ghRef = process.env.GITHUB_REF;
+  if (ghRef?.startsWith('refs/heads/')) return ghRef.slice('refs/heads/'.length);
+  return undefined;
+}
+
+/**
  * Generate a simple unique ID for steps
  */
 export function generateStepId(stepNumber: number): string {
