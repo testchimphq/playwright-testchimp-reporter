@@ -83,6 +83,8 @@ export interface TestChimpReporterOptions {
   apiKey?: string;
   /** Override TESTCHIMP_BACKEND_URL env var (default: https://featureservice.testchimp.io) */
   backendUrl?: string;
+  /** Override TESTCHIMP_BATCH_INVOCATION_ID env var - when set (e.g. by platform), reporter uses this instead of generating one */
+  batchInvocationId?: string;
   /** Override TESTCHIMP_PROJECT_ID env var */
   projectId?: string;
   /** Override TESTCHIMP_TESTS_FOLDER env var - base folder for relative path calculation */

@@ -74,6 +74,7 @@ export class TestChimpReporter implements Reporter {
     this.options = {
       apiKey: options.apiKey || '',
       backendUrl: options.backendUrl || '',
+      batchInvocationId: options.batchInvocationId || '',
       projectId: options.projectId || '',
       testsFolder: options.testsFolder || '',
       release: options.release || '',
@@ -86,7 +87,7 @@ export class TestChimpReporter implements Reporter {
 
   onBegin(config: FullConfig, suite: Suite): void {
     this.config = config;
-    this.batchInvocationId = generateUUID();
+    this.batchInvocationId = getEnvVar('TESTCHIMP_BATCH_INVOCATION_ID', this.options.batchInvocationId) || generateUUID();
 
     // Initialize configuration from env vars (env vars take precedence)
     const apiKey = getEnvVar('TESTCHIMP_API_KEY', this.options.apiKey);
