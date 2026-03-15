@@ -15,9 +15,13 @@ import {
   SmartTestExecutionReport,
   SmartTestExecutionStep,
   SmartTestExecutionStatus,
-  StepExecutionStatus
+  StepExecutionStatus,
+  SmartTestExecutionJobDetail,
+  RetryAttemptLog,
+  JobManifestEntry
 } from './types';
 import { derivePaths, generateStepId, generateUUID, getEnvVar } from './utils';
+import path from 'path';
 
 /**
  * Internal state for tracking a test execution
@@ -61,11 +65,15 @@ export class TestChimpReporter implements Reporter {
   private batchInvocationId: string = '';
   private testsFolder: string = '';
 
-  // Track test executions (keyed by test ID + attempt)
+  // Track test executions (keyed by test ID + attempt, e.g. "testId_attempt_0", "testId_attempt_1").
+  // In platform mode we keep all attempts until test_end so the job detail we send includes full retryAttemptLogs.
   private testExecutions: Map<string, TestExecutionState> = new Map();
 
   // Track retry counts per test (to identify final attempt)
   private testRetryInfo: Map<string, RetryInfo> = new Map();
+
+  // Platform mode: manifest (test identity -> jobId), loaded once in onBegin
+  private jobManifest: JobManifestEntry[] = [];
 
   // Flag to indicate if reporter is properly configured
   private isEnabled: boolean = false;
@@ -74,6 +82,7 @@ export class TestChimpReporter implements Reporter {
     this.options = {
       apiKey: options.apiKey || '',
       backendUrl: options.backendUrl || '',
+      platformBackendUrl: options.platformBackendUrl || '',
       batchInvocationId: options.batchInvocationId || '',
       projectId: options.projectId || '',
       testsFolder: options.testsFolder || '',
@@ -81,7 +90,8 @@ export class TestChimpReporter implements Reporter {
       environment: options.environment || '',
       reportOnlyFinalAttempt: options.reportOnlyFinalAttempt ?? true,
       captureScreenshots: options.captureScreenshots ?? true,
-      verbose: options.verbose ?? false
+      verbose: options.verbose ?? false,
+      executionMode: (options.executionMode || getEnvVar('TESTCHIMP_EXECUTION_MODE', 'ci') || 'ci') as 'ci' | 'platform'
     };
   }
 
@@ -91,9 +101,13 @@ export class TestChimpReporter implements Reporter {
 
     // Initialize configuration from env vars (env vars take precedence)
     const apiKey = getEnvVar('TESTCHIMP_API_KEY', this.options.apiKey);
-    const backendUrl = getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io';
     const projectId = getEnvVar('TESTCHIMP_PROJECT_ID', this.options.projectId);
     this.testsFolder = getEnvVar('TESTCHIMP_TESTS_FOLDER', this.options.testsFolder) || 'tests';
+    // In platform mode reporter calls scriptservice (step_end/test_end) via TESTCHIMP_PLATFORM_BACKEND_URL; TESTCHIMP_BACKEND_URL stays as featureservice for ai-wright etc.
+    const backendUrl =
+      this.options.executionMode === 'platform'
+        ? getEnvVar('TESTCHIMP_PLATFORM_BACKEND_URL', this.options.platformBackendUrl) || getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io'
+        : getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io';
 
     // Update options with env var values for release/environment
     this.options.release = getEnvVar('TESTCHIMP_RELEASE', this.options.release) || '';
@@ -108,13 +122,129 @@ export class TestChimpReporter implements Reporter {
     this.apiClient = new TestChimpApiClient(backendUrl, apiKey, projectId, this.options.verbose);
     this.isEnabled = true;
 
+    if (this.options.executionMode === 'platform') {
+      this.jobManifest = this.loadJobManifest();
+      const manifestPath =
+        getEnvVar('TESTCHIMP_JOB_MANIFEST_PATH') ||
+        (this.testsFolder ? path.join(this.testsFolder, '.testchimp-job-manifest.json') : '.testchimp-job-manifest.json');
+      const rootDir = this.config?.rootDir || process.cwd();
+      const resolvedPath = path.isAbsolute(manifestPath) ? manifestPath : path.join(rootDir, manifestPath);
+      const sample =
+        this.jobManifest.length > 0
+          ? ` (sample: ${JSON.stringify(this.jobManifest.slice(0, 2).map((e) => ({ folderPath: e.folderPath, fileName: e.fileName, suitePath: e.suitePath ?? [], testName: e.testName })))}`
+          : '';
+      console.log(
+        `[TestChimp] Platform mode: manifest from ${resolvedPath} → ${this.jobManifest.length} entries${sample} (backend for step_end/test_end: ${backendUrl})`
+      );
+    }
+
     if (this.options.verbose) {
       console.log(`[TestChimp] Reporter initialized. Batch ID: ${this.batchInvocationId}`);
       console.log(`[TestChimp] Tests folder: ${this.testsFolder || '(root)'}`);
+      console.log(`[TestChimp] Execution mode: ${this.options.executionMode}`);
     }
 
     // Scan suite to understand retry configuration
     this.scanTestRetries(suite);
+  }
+
+  private loadJobManifest(): JobManifestEntry[] {
+    const manifestPath =
+      getEnvVar('TESTCHIMP_JOB_MANIFEST_PATH') ||
+      (this.testsFolder ? path.join(this.testsFolder, '.testchimp-job-manifest.json') : '.testchimp-job-manifest.json');
+    const rootDir = this.config?.rootDir || process.cwd();
+    const resolvedPath = path.isAbsolute(manifestPath) ? manifestPath : path.join(rootDir, manifestPath);
+    try {
+      const content = fs.readFileSync(resolvedPath, 'utf8');
+      const parsed = JSON.parse(content) as JobManifestEntry[];
+      const entries = Array.isArray(parsed) ? parsed : [];
+      if (entries.length === 0 && this.options.executionMode === 'platform') {
+        console.warn(`[TestChimp] Platform mode: manifest at ${resolvedPath} is empty or not an array (step_end/test_end will be skipped).`);
+      }
+      return entries;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[TestChimp] Could not load job manifest from ${resolvedPath}: ${msg}`);
+      return [];
+    }
+  }
+
+  /**
+   * Resolve jobId from the platform manifest.
+   * - No describe block: both parser and Playwright use suitePath [] → exact match.
+   * - Global describe(): parser only sees test.describe() so manifest has []; Playwright reports e.g. ["Suite"] → fallback with [].
+   */
+  private getJobIdFromManifest(folderPath: string, fileName: string, suitePath: string[], testName: string): string | undefined {
+    const match = (e: JobManifestEntry, sp: string[]) =>
+      e.folderPath === folderPath &&
+      e.fileName === fileName &&
+      JSON.stringify(e.suitePath || []) === JSON.stringify(sp || []) &&
+      e.testName === testName;
+
+    let entry = this.jobManifest.find((e) => match(e, suitePath));
+    if (!entry && suitePath.length > 0) {
+      entry = this.jobManifest.find((e) => match(e, []));
+    }
+    return entry?.jobId;
+  }
+
+  /**
+   * Build full job detail from all attempts for this test (from in-memory testExecutions).
+   * For step_end: currentAttemptIsFinal=false (current attempt in progress).
+   * For test_end: currentAttemptIsFinal=true, finalStatus/error from result.
+   * Past attempts are marked FAILED (retry implies they did not succeed).
+   */
+  private buildJobDetailFromAttempts(
+    testId: string,
+    testName: string,
+    upToRetryInclusive: number,
+    currentAttemptIsFinal: boolean,
+    finalStatus?: SmartTestExecutionStatus,
+    finalError?: string
+  ): SmartTestExecutionJobDetail {
+    const retryAttemptLogs: RetryAttemptLog[] = [];
+    for (let r = 0; r <= upToRetryInclusive; r++) {
+      const key = `${testId}_attempt_${r}`;
+      const exec = this.testExecutions.get(key);
+      if (!exec) continue;
+      const isCurrent = r === upToRetryInclusive;
+      const status =
+        isCurrent && currentAttemptIsFinal && finalStatus !== undefined
+          ? finalStatus
+          : isCurrent && !currentAttemptIsFinal
+            ? SmartTestExecutionStatus.SMART_TEST_EXECUTION_IN_PROGRESS
+            : !isCurrent
+              ? SmartTestExecutionStatus.SMART_TEST_EXECUTION_FAILED
+              : undefined;
+      const error = isCurrent && currentAttemptIsFinal ? finalError : undefined;
+      retryAttemptLogs.push({
+        retryCount: r,
+        steps: [...exec.steps],
+        status,
+        error
+      });
+    }
+    const currentExec = this.testExecutions.get(`${testId}_attempt_${upToRetryInclusive}`);
+    const steps = currentExec?.steps ?? [];
+    return {
+      testName,
+      steps,
+      status: currentAttemptIsFinal && finalStatus !== undefined ? finalStatus : SmartTestExecutionStatus.SMART_TEST_EXECUTION_IN_PROGRESS,
+      error: currentAttemptIsFinal ? finalError : undefined,
+      scenarioCoverageResults: [],
+      retryAttemptLogs
+    };
+  }
+
+  /** Build current job detail for platform step_end (all attempts so far, current still in progress) */
+  private buildCurrentJobDetailForPlatform(test: TestCase, currentRetry: number, testName: string): SmartTestExecutionJobDetail {
+    return this.buildJobDetailFromAttempts(test.id, testName, currentRetry, false);
+  }
+
+  /** Build final job detail for platform test_end (all attempts with final status) */
+  private buildFinalJobDetailForPlatform(test: TestCase, result: TestResult, testName: string): SmartTestExecutionJobDetail {
+    const status = this.mapStatus(result.status);
+    return this.buildJobDetailFromAttempts(test.id, testName, result.retry, true, status, result.error?.message);
   }
 
   onTestBegin(test: TestCase, result: TestResult): void {
@@ -188,6 +318,32 @@ export class TestChimpReporter implements Reporter {
     if (this.options.verbose) {
       console.log(`[TestChimp] Step captured: ${stepNumber} (${step.category}): ${step.title} - ${executionStep.status}`);
     }
+
+    // Platform mode: after each step, send full job detail to scriptservice (blind upsert)
+    if (this.options.executionMode === 'platform' && this.apiClient) {
+      const paths = derivePaths(test, this.testsFolder, this.config.rootDir, false);
+      const jobId = this.getJobIdFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
+      if (jobId) {
+        const jobDetail = this.buildCurrentJobDetailForPlatform(test, result.retry, paths.testName);
+        this.apiClient.platformStepEnd(jobId, jobDetail).then(
+          () => {
+            if (this.options.verbose) {
+              console.log(`[TestChimp] platform/step_end ok jobId=${jobId} steps=${jobDetail.steps?.length ?? 0}`);
+            }
+          },
+          (err) => {
+            console.error(
+              `[TestChimp] platform/step_end failed jobId=${jobId}:`,
+              err instanceof Error ? err.message : err
+            );
+          }
+        );
+      } else {
+        console.warn(
+          `[TestChimp] platform/step_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}"`
+        );
+      }
+    }
   }
 
   async onTestEnd(test: TestCase, result: TestResult): Promise<void> {
@@ -222,7 +378,36 @@ export class TestChimpReporter implements Reporter {
 
     console.log(`[TestChimp] Test status: ${result.status}, retry: ${result.retry}, maxRetries: ${retryInfo?.maxRetries ?? 'unknown'}, isFinalAttempt: ${isFinalAttempt}`);
 
-    // Skip non-final attempts if configured
+    // Platform mode: we keep all retry attempts in testExecutions until test_end. Only send test_end on final attempt (with full retryAttemptLogs), then cleanup.
+    if (this.options.executionMode === 'platform') {
+      if (isFinalAttempt && this.apiClient) {
+        const paths = derivePaths(test, this.testsFolder, this.config.rootDir, false);
+        const jobId = this.getJobIdFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
+        if (jobId) {
+          if (this.options.captureScreenshots) {
+            this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
+          }
+          const jobDetail = this.buildFinalJobDetailForPlatform(test, result, paths.testName);
+          try {
+            await this.apiClient.platformTestEnd(jobId, jobDetail);
+            console.log(`[TestChimp] platform/test_end sent: ${test.title} jobId=${jobId} retryAttemptLogs=${jobDetail.retryAttemptLogs?.length ?? 0}`);
+          } catch (error) {
+            console.error(`[TestChimp] platform/test_end failed for ${test.title}:`, error);
+          }
+        } else {
+          console.warn(
+            `[TestChimp] platform/test_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}"`
+          );
+        }
+        // Cleanup all attempts for this test (we have attempts 0..result.retry)
+        for (let r = 0; r <= result.retry; r++) {
+          this.testExecutions.delete(this.getTestKey(test, r));
+        }
+      }
+      return;
+    }
+
+    // CI mode: skip non-final attempts if configured
     if (this.options.reportOnlyFinalAttempt && !isFinalAttempt) {
       console.log(`[TestChimp] Skipping non-final attempt ${result.retry + 1} for: ${test.title}`);
       this.testExecutions.delete(testKey);
@@ -305,6 +490,10 @@ export class TestChimpReporter implements Reporter {
       getEnvVar('GITHUB_REF_NAME', '') ||
       getEnvVar('CI_COMMIT_REF_NAME', '') ||
       undefined;
+    // Platform run: scriptservice sets TESTCHIMP_BRANCH_ID (our entity id) for unique test resolution; CI does not have it
+    const branchIdRaw = getEnvVar('TESTCHIMP_BRANCH_ID', '');
+    const branchId = branchIdRaw ? parseInt(branchIdRaw, 10) : undefined;
+    const branchIdValid = branchId !== undefined && !Number.isNaN(branchId) ? branchId : undefined;
 
     // Map Playwright status to SmartTestExecutionStatus
     const status = this.mapStatus(result.status);
@@ -331,7 +520,8 @@ export class TestChimpReporter implements Reporter {
       },
       startedAtMillis: execution.startedAt,
       completedAtMillis: Date.now(),
-      branchName
+      branchName,
+      branchId: branchIdValid
     };
   }
 

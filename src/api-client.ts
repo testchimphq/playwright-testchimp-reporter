@@ -1,7 +1,8 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import {
   IngestSmartTestExecutionReportResponse,
-  SmartTestExecutionReport
+  SmartTestExecutionReport,
+  SmartTestExecutionJobDetail
 } from './types';
 
 /**
@@ -121,6 +122,48 @@ export class TestChimpApiClient {
         }
       }
 
+      throw error;
+    }
+  }
+
+  /**
+   * Platform mode: send full job detail on step end (blind upsert).
+   * POST {backend}/api/platform/step_end with jobId and jobDetail.
+   */
+  async platformStepEnd(jobId: string, jobDetail: SmartTestExecutionJobDetail): Promise<void> {
+    try {
+      const body = { jobId, jobDetail };
+      if (this.verbose) {
+        console.log(`[TestChimp] platform/step_end jobId=${jobId} steps=${jobDetail.steps?.length ?? 0} retryAttemptLogs=${jobDetail.retryAttemptLogs?.length ?? 0}`);
+      }
+      await this.client.post('/api/platform/step_end', body);
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        const message = error.response?.data?.message || error.message;
+        console.error(`[TestChimp] platform/step_end error (${status}): ${message}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Platform mode: send final job detail on test end (upsert + scenario coverage).
+   * POST {backend}/api/platform/test_end with jobId and jobDetail.
+   */
+  async platformTestEnd(jobId: string, jobDetail: SmartTestExecutionJobDetail): Promise<void> {
+    try {
+      const body = { jobId, jobDetail };
+      if (this.verbose) {
+        console.log(`[TestChimp] platform/test_end jobId=${jobId} status=${jobDetail.status}`);
+      }
+      await this.client.post('/api/platform/test_end', body);
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        const message = error.response?.data?.message || error.message;
+        console.error(`[TestChimp] platform/test_end error (${status}): ${message}`);
+      }
       throw error;
     }
   }

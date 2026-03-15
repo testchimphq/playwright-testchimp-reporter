@@ -41,6 +41,14 @@ export interface ScenarioCoverageResult {
   status: ScenarioCoverageStatus;
 }
 
+/** Single retry attempt log (steps + status + error for one attempt) */
+export interface RetryAttemptLog {
+  retryCount?: number;
+  steps: SmartTestExecutionStep[];
+  status?: SmartTestExecutionStatus;
+  error?: string;
+}
+
 export interface SmartTestExecutionJobDetail {
   testName: string;
   steps: SmartTestExecutionStep[];
@@ -48,6 +56,8 @@ export interface SmartTestExecutionJobDetail {
   error?: string;
   updatedScript?: string;
   scenarioCoverageResults: ScenarioCoverageResult[];
+  /** All retry attempts (platform mode); each entry has retryCount, steps, status, error */
+  retryAttemptLogs?: RetryAttemptLog[];
 }
 
 export interface SmartTestExecutionReport {
@@ -61,7 +71,8 @@ export interface SmartTestExecutionReport {
   jobDetail: SmartTestExecutionJobDetail;
   startedAtMillis?: number;
   completedAtMillis?: number;
-  branchName?: string;
+  branchName?: string;  // CI: from git (e.g. GITHUB_REF_NAME); not available in platform run
+  branchId?: number;    // Platform run: our entity id; when set, backend uses for unique test resolution
 }
 
 export interface IngestSmartTestExecutionReportRequest {
@@ -75,14 +86,25 @@ export interface IngestSmartTestExecutionReportResponse {
   scenariosPopulated?: number;
 }
 
+/** One entry in the job manifest (test identity -> jobId) written by scriptservice for platform mode */
+export interface JobManifestEntry {
+  folderPath: string;
+  fileName: string;
+  suitePath: string[];
+  testName: string;
+  jobId: string;
+}
+
 /**
  * Reporter configuration options
  */
 export interface TestChimpReporterOptions {
   /** Override TESTCHIMP_API_KEY env var */
   apiKey?: string;
-  /** Override TESTCHIMP_BACKEND_URL env var (default: https://featureservice.testchimp.io) */
+  /** Override TESTCHIMP_BACKEND_URL env var (default: https://featureservice.testchimp.io) - used for ingest in CI; also for ai-wright etc. */
   backendUrl?: string;
+  /** Override TESTCHIMP_PLATFORM_BACKEND_URL env var - in platform mode, reporter uses this for step_end/test_end (scriptservice); if unset, falls back to backendUrl */
+  platformBackendUrl?: string;
   /** Override TESTCHIMP_BATCH_INVOCATION_ID env var - when set (e.g. by platform), reporter uses this instead of generating one */
   batchInvocationId?: string;
   /** Override TESTCHIMP_PROJECT_ID env var */
@@ -99,4 +121,6 @@ export interface TestChimpReporterOptions {
   captureScreenshots?: boolean;
   /** Enable verbose logging (default: false) */
   verbose?: boolean;
+  /** Execution mode: 'ci' = report to featureservice ingest on test end; 'platform' = report step_end/test_end to scriptservice (default: from TESTCHIMP_EXECUTION_MODE or 'ci') */
+  executionMode?: 'ci' | 'platform';
 }
