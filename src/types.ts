@@ -17,6 +17,7 @@ export enum BatchInvocationStatus {
   BATCH_INVOCATION_FAILED = 3,
   BATCH_INVOCATION_EXCEPTION = 4,
   BATCH_INVOCATION_CANCELLED = 5,
+  BATCH_INVOCATION_INTERRUPTED = 6,
 }
 
 export interface CompleteBatchInvocationResponse {

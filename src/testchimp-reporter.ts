@@ -1667,8 +1667,10 @@ function mapPlaywrightSuiteStatusToBatchStatus(status: FullResult['status']): Ba
       return BatchInvocationStatus.BATCH_INVOCATION_COMPLETE;
     case 'timedout':
       return BatchInvocationStatus.BATCH_INVOCATION_EXCEPTION;
-    case 'failed':
     case 'interrupted':
+      // Preserve Playwright suite abort as its own terminal status — do not fold into FAILED.
+      return BatchInvocationStatus.BATCH_INVOCATION_INTERRUPTED;
+    case 'failed':
     default:
       return BatchInvocationStatus.BATCH_INVOCATION_FAILED;
   }
